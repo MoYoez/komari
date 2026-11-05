@@ -1,0 +1,6 @@
+{
+  "authorization_url": "https://komari.example.com/api/ai-terminal/oauth/authorize",
+  "api_base": "https://ss.puu.moe/api/ai-terminal",
+  "client_id": "komari-local-skill",
+  "redirect_uri": "http://127.0.0.1:8765/callback"
+}

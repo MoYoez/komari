@@ -9,13 +9,14 @@ import (
 
 func EstablishConnection(c *gin.Context) {
 	session_id := c.Query("id")
-	TerminalSessionsMutex.Lock()
-	session, exists := TerminalSessions[session_id]
-	TerminalSessionsMutex.Unlock()
 	authenticatedUUID, _ := c.Get("client_uuid")
 	authenticatedString, hasAuthenticatedUUID := authenticatedUUID.(string)
-	if !exists || session == nil || session.Browser == nil ||
-		(hasAuthenticatedUUID && authenticatedString != "" && authenticatedString != session.UUID) {
+	TerminalSessionsMutex.Lock()
+	session := TerminalSessions[session_id]
+	allowed := session != nil && session.Browser != nil &&
+		(!hasAuthenticatedUUID || authenticatedString == "" || authenticatedString == session.UUID)
+	TerminalSessionsMutex.Unlock()
+	if !allowed {
 		c.JSON(404, gin.H{"status": "error", "error": "Session not found"})
 		return
 	}

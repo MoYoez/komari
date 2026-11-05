@@ -42,7 +42,7 @@ func RequestTerminal(c *gin.Context) {
 	} else {
 		TerminalSessionsMutex.Lock()
 		session := TerminalSessions[id]
-		allowed := session != nil && session.UUID == uuid && (isAPIKey || session.UserUUID == userID)
+		allowed := session != nil && session.native == nil && session.UUID == uuid && (isAPIKey || session.UserUUID == userID)
 		TerminalSessionsMutex.Unlock()
 		if !allowed {
 			c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "Terminal session not found"})

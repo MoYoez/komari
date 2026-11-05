@@ -36,6 +36,7 @@ import (
 	"github.com/komari-monitor/komari/pkg/jsruntime"
 	"github.com/komari-monitor/komari/pkg/jsruntime/require"
 	"github.com/komari-monitor/komari/pkg/rpc"
+	"github.com/komari-monitor/komari/web/api/terminal"
 	"github.com/komari-monitor/komari/web/connection"
 )
 
@@ -123,6 +124,7 @@ type Instance struct {
 	rpcMethods           map[string]moejs.Value   // registered RPC method -> JS handler
 	cronJobs             []string                 // scheduler job names, removed on unload
 	notificationChannels map[string]struct{}
+	terminals            *terminal.Bridge
 }
 
 // global is the process-wide plugin manager.
@@ -262,7 +264,7 @@ func (m *Manager) load(short string) error {
 	logs.Reset()
 	_, _ = logs.Write([]byte("[plugin] loading " + short + "\n"))
 
-	inst := &Instance{info: info, dir: dir, handlers: make(map[string]moejs.Value), statics: make(map[string]*staticConfig)}
+	inst := &Instance{info: info, dir: dir, handlers: make(map[string]moejs.Value), statics: make(map[string]*staticConfig), terminals: terminal.NewBridge(short)}
 	m.mu.Lock()
 	if _, ok := m.instances[short]; ok {
 		m.mu.Unlock()
@@ -335,6 +337,7 @@ func (m *Manager) dropInstance(short string, inst *Instance) {
 	}
 	delete(m.instances, short)
 	m.mu.Unlock()
+	inst.terminals.Close()
 	_ = m.unregisterNotificationChannels(inst)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -379,6 +382,7 @@ func (m *Manager) unload(short string) error {
 	delete(m.instances, short)
 	m.mu.Unlock()
 
+	inst.terminals.Close()
 	inst.mu.RLock()
 	rt := inst.runtime
 	inst.mu.RUnlock()

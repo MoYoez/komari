@@ -7,14 +7,21 @@ import (
 	"github.com/komari-monitor/komari/web/connection"
 )
 
+type TerminalPeer interface {
+	ReadMessage() (int, []byte, error)
+	WriteMessage(int, []byte) error
+	Close() error
+}
+
 type TerminalSession struct {
 	UUID         string
 	UserUUID     string
-	Browser      *connection.SafeConn
+	Browser      TerminalPeer
 	Agent        *connection.SafeConn
 	RequesterIp  string
 	Forwarding   bool
 	CleanupTimer *time.Timer
+	native       *memoryPeer
 }
 
 var TerminalSessionsMutex = &sync.Mutex{}
@@ -28,7 +35,8 @@ func scheduleCleanup(id string, session *TerminalSession) {
 		session.CleanupTimer.Stop()
 	}
 	session.CleanupTimer = time.AfterFunc(terminalSessionRetention, func() {
-		var browser, agent *connection.SafeConn
+		var browser TerminalPeer
+		var agent *connection.SafeConn
 
 		TerminalSessionsMutex.Lock()
 		if current, ok := TerminalSessions[id]; !ok || current != session {
@@ -55,8 +63,9 @@ func stopCleanup(session *TerminalSession) {
 	}
 }
 
-func suspendSession(id string, browser, agent *connection.SafeConn) {
-	var otherBrowser, otherAgent *connection.SafeConn
+func suspendSession(id string, browser TerminalPeer, agent *connection.SafeConn) {
+	var otherBrowser TerminalPeer
+	var otherAgent *connection.SafeConn
 
 	TerminalSessionsMutex.Lock()
 	session, ok := TerminalSessions[id]
@@ -70,24 +79,34 @@ func suspendSession(id string, browser, agent *connection.SafeConn) {
 	session.Browser = nil
 	session.Agent = nil
 	session.Forwarding = false
-	scheduleCleanup(id, session)
+	if session.native != nil {
+		stopCleanup(session)
+		delete(TerminalSessions, id)
+	} else {
+		scheduleCleanup(id, session)
+	}
 	TerminalSessionsMutex.Unlock()
 
 	if otherBrowser != nil {
 		_ = otherBrowser.Close()
 	}
-	if otherAgent != nil {
+	if session.native != nil {
+		session.native.closeAgent(otherAgent)
+	} else if otherAgent != nil {
 		_ = otherAgent.Close()
 	}
 }
 
 func closeSession(id string) {
-	var browser, agent *connection.SafeConn
+	var browser TerminalPeer
+	var agent *connection.SafeConn
+	var peer *memoryPeer
 
 	TerminalSessionsMutex.Lock()
 	if session, ok := TerminalSessions[id]; ok && session != nil {
 		stopCleanup(session)
 		browser, agent = session.Browser, session.Agent
+		peer = session.native
 		delete(TerminalSessions, id)
 	}
 	TerminalSessionsMutex.Unlock()
@@ -95,7 +114,9 @@ func closeSession(id string) {
 	if browser != nil {
 		_ = browser.Close()
 	}
-	if agent != nil {
+	if peer != nil {
+		peer.closeAgent(agent)
+	} else if agent != nil {
 		_ = agent.Close()
 	}
 }
@@ -103,7 +124,7 @@ func closeSession(id string) {
 func attachBrowser(id, userUUID string, apiKey bool, conn *connection.SafeConn) (*TerminalSession, bool) {
 	TerminalSessionsMutex.Lock()
 	session, ok := TerminalSessions[id]
-	if !ok || session == nil {
+	if !ok || session == nil || session.native != nil {
 		TerminalSessionsMutex.Unlock()
 		return nil, false
 	}
@@ -131,6 +152,13 @@ func attachAgent(id string, conn *connection.SafeConn) (*TerminalSession, bool) 
 		TerminalSessionsMutex.Unlock()
 		return nil, false
 	}
+	if session.native != nil {
+		if session.Agent != nil || session.native.isClosed() {
+			TerminalSessionsMutex.Unlock()
+			return nil, false
+		}
+		session.native.agentConn = conn.GetConn()
+	}
 	oldAgent := session.Agent
 	session.Agent = conn
 	session.Forwarding = false
@@ -153,6 +181,9 @@ func maybeStartForwarding(id string) {
 	}
 	session.Forwarding = true
 	browser, agent := session.Browser, session.Agent
+	if session.native != nil {
+		close(session.native.ready)
+	}
 	TerminalSessionsMutex.Unlock()
 	go ForwardTerminal(id, browser, agent)
 }

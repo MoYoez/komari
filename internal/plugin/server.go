@@ -59,6 +59,9 @@ import (
 //	                                      admin authority; resolves to the RPC
 //	                                      result or rejects with an Error
 //	                                      carrying code/message/data
+//	server.terminal(action, params)       operate plugin-owned PTYs or verify
+//	                                      existing sensitive-operation 2FA;
+//	                                      requires allowSystemRPC
 //	server.registerRPC(method, handler)   register a plugin-owned RPC method
 //	server.registerNotificationChannel(id, configuration, handler)
 //	                                      register a notification channel
@@ -79,6 +82,7 @@ import (
 func (m *Manager) registerServerModule(host *jsruntime.Host, registry *require.Registry, inst *Instance) {
 	registry.RegisterNativeModule("server", func(vm *moejs.Runtime, module *engine.Object) {
 		exports := vm.Realm().NewObject()
+		m.registerTerminal(host, vm, exports, inst)
 		_ = native.Function(vm, exports, "route", func(_ *moejs.Realm, _ moejs.Value, args []moejs.Value) (moejs.Value, error) {
 			method := strings.ToUpper(strings.TrimSpace(native.String(vm, moejs.Arg(args, 0))))
 			path := native.String(vm, moejs.Arg(args, 1))
