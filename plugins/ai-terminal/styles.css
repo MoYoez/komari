@@ -34,6 +34,9 @@ p { margin: 12px 0; }
 .client-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; border-radius: 20px; background: var(--surface-container); margin: 24px 0; }
 .supporting { display: block; color: var(--on-surface-variant); font-size: 12px; margin-bottom: 2px; }
 .client-name { font-size: 17px; font-weight: 500; overflow-wrap: anywhere; }
+.request-purpose { padding: 14px 18px; margin-bottom: 24px; border-radius: 16px; background: var(--surface-low); }
+.request-purpose p { margin: 4px 0 0; overflow-wrap: anywhere; white-space: pre-line; }
+.grant-purpose { overflow-wrap: anywhere; white-space: pre-line; }
 .chip { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; padding: 5px 12px; border-radius: 8px; background: var(--primary-container); color: var(--on-primary-container); font-size: 12px; font-weight: 500; }
 fieldset { border: 0; padding: 0; margin: 0 0 24px; min-width: 0; }
 legend { margin-bottom: 12px; padding: 0; color: var(--on-surface-variant); font-size: 13px; font-weight: 600; }

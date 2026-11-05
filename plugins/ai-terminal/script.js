@@ -8,7 +8,17 @@ if (typeof server.terminal !== "function") throw new Error("AI Terminal requires
 const PREFIX = "/api/ai-terminal";
 const CONSENT_TTL = 300;
 const CODE_TTL = 60;
-const SCOPES = ["pty:read", "pty:write"];
+const SECONDS_PER_MINUTE = 60;
+const SECONDS_PER_DAY = 86400;
+const ACCESS_SCOPE = "access:read";
+const PTY_SCOPES = ["pty:read", "pty:write"];
+const QUERY_PURPOSE = "查询可用机器和已有授权";
+const SCOPE_INFO = {
+  "access:read": {title: "查询机器与授权", description: "查看允许访问的机器及本应用已有的授权，不读取终端输出或执行命令"},
+  "pty:read": {title: "查看终端", description: "读取本次授权的会话状态和终端输出"},
+  "pty:write": {title: "控制终端", description: "打开会话、输入命令、调整尺寸和关闭终端"},
+};
+const SCOPES = Object.keys(SCOPE_INFO);
 const config = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
 const pageStyles = fs.readFileSync(path.join(__dirname, "styles.css"), "utf8");
 const TERMINAL_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 8 4 4-4 4m6 0h4"/></svg>';
@@ -19,8 +29,8 @@ const revokeForms = new Map();
 if (!fs.existsSync(grantsPath)) fs.writeFileSync(grantsPath, "[]");
 let grants = JSON.parse(fs.readFileSync(grantsPath, "utf8"));
 
-if (new URL(config.admin_origin).origin !== config.admin_origin || !Number.isInteger(config.access_token_ttl_seconds) || config.access_token_ttl_seconds <= 0) {
-  throw new Error("Set admin_origin and a positive access_token_ttl_seconds in config.json");
+if (new URL(config.admin_origin).origin !== config.admin_origin || ![config.access_token_ttl_seconds, config.query_token_ttl_seconds].every(v => Number.isInteger(v) && v > 0)) {
+  throw new Error("Set admin_origin and positive access_token_ttl_seconds/query_token_ttl_seconds in config.json");
 }
 for (const client of config.clients) {
   if (!client.id || !client.name || client.redirect_uris.length === 0 || client.hosts.length === 0 || client.scopes.length === 0) throw new Error("Incomplete OAuth client configuration");
@@ -84,6 +94,14 @@ async function ownedSession(grant, id) {
   if (!session || !grant.hosts.includes(session.client_uuid)) fail(404, "session_not_found", "No authorized session with this ID");
   return session;
 }
+async function allowedHosts(uuids) {
+  const nodes = await server.call("admin:listClients");
+  return uuids.map(uuid => {
+    const node = nodes.find(n => n.uuid === uuid);
+    if (!node) fail(400, "unknown_host", "The configured host no longer exists in Komari: " + uuid);
+    return {uuid: node.uuid, name: node.name};
+  });
+}
 async function revokeGrant(id) {
   save(grants.filter(g => g.id !== id));
   await server.terminal("closeOwner", {owner: id});
@@ -100,13 +118,33 @@ route("GET", "/oauth/authorize", async (req, res) => {
   if (!q.state || !q.scope) fail(400, "invalid_request", "state and scope are required");
   const scopes = q.scope.split(" ");
   if (!scopes.every(s => client.scopes.includes(s))) fail(400, "invalid_scope", "Unsupported scope");
+  const queryOnly = scopes.includes(ACCESS_SCOPE);
+  if (queryOnly && scopes.length !== 1) fail(400, "invalid_scope", "Query access and PTY access require separate grants");
+  if (!queryOnly && (!q.hosts || !q.purpose || !q.purpose.trim())) fail(400, "invalid_request", "PTY requests must specify hosts and purpose");
+  const requestedHosts = queryOnly ? client.hosts : q.hosts.split(",");
+  if (!requestedHosts.length || !requestedHosts.every(h => client.hosts.includes(h))) fail(400, "invalid_request", "Requested hosts are outside this client's allowlist");
+  const purpose = queryOnly ? QUERY_PURPOSE : q.purpose.trim();
+  const tokenTtl = queryOnly ? config.query_token_ttl_seconds : config.access_token_ttl_seconds;
+  const hosts = await allowedHosts(requestedHosts);
   const nonce = random();
-  pending.set(nonce, {client_id: client.id, redirect_uri: q.redirect_uri, challenge: q.code_challenge, state: q.state, scopes, hosts: client.hosts, user_uuid: user, expires_at: now() + CONSENT_TTL});
-  const hosts = config.hosts.filter(h => client.hosts.includes(h.uuid));
-  const hostFields = hosts.map(h => `<label class="selection"><input type="checkbox" name="host" value="${escape(h.uuid)}" checked><span><strong>${escape(h.name)}</strong><small>通过 Komari Agent 连接</small></span></label>`).join("");
-  const scopeFields = scopes.map(s => `<label class="selection"><input type="checkbox" name="scope" value="${escape(s)}" checked><span><strong>${s === "pty:write" ? "控制终端" : "查看终端"}</strong><small>${s === "pty:write" ? "打开会话、输入命令、调整尺寸和关闭终端" : "读取本次授权的会话状态和终端输出"}</small></span></label>`).join("");
+  pending.set(nonce, {client_id: client.id, redirect_uri: q.redirect_uri, challenge: q.code_challenge, state: q.state, scopes, hosts: requestedHosts, purpose, token_ttl_seconds: tokenTtl, user_uuid: user, expires_at: now() + CONSENT_TTL});
+  const hostFields = hosts.map(h => `<label class="selection"><input type="checkbox" name="host" value="${escape(h.uuid)}" checked><span><strong>${escape(h.name)}</strong><small>${queryOnly ? "允许查询此机器的名称与授权信息" : "通过 Komari Agent 连接"}</small></span></label>`).join("");
+  const scopeFields = scopes.map(s => `<label class="selection"><input type="checkbox" name="scope" value="${escape(s)}" checked><span><strong>${SCOPE_INFO[s].title}</strong><small>${SCOPE_INFO[s].description}</small></span></label>`).join("");
   const connectionDetails = hosts.map(h => `<p>${escape(h.name)}<br><code>${escape(h.uuid)}</code></p>`).join("");
-  page(res, "授权终端访问", `<p class="lead">选择允许访问的主机和权限，连接你的本地 AI 工具。</p><div class="client-card"><div><span class="supporting">请求访问的应用</span><strong class="client-name">${escape(client.name)}</strong></div><span class="chip">${config.access_token_ttl_seconds / 60} 分钟</span></div><form method="post"><input type="hidden" name="nonce" value="${nonce}"><fieldset><legend>允许访问的主机</legend>${hostFields}</fieldset><fieldset><legend>允许的操作</legend>${scopeFields}</fieldset><label class="field"><span>二次验证码</span><input type="text" name="code" placeholder="启用 2FA 后填写" autocomplete="one-time-code" inputmode="numeric"></label><p class="helper">未启用两步验证时可留空。</p><p class="notice">终端继承主机 Agent 的系统权限。你可以随时撤销授权，同时关闭对应的终端会话。</p><details><summary>连接信息</summary><div class="connection-details">${connectionDetails}<p>权限：<code>${escape(scopes.join(" "))}</code></p><p>授权回调<br><code>${escape(q.redirect_uri)}</code></p></div></details><div class="actions"><button class="secondary" name="decision" value="deny">取消</button><button name="decision" value="approve">授权访问 <span aria-hidden="true">→</span></button></div></form><div class="inline-link"><a class="text-link" href="${PREFIX}/oauth/grants">管理已有授权</a></div>`);
+  const duration = queryOnly ? `${tokenTtl / SECONDS_PER_DAY} 天` : `${tokenTtl / SECONDS_PER_MINUTE} 分钟`;
+  page(res, queryOnly ? "授权查询访问" : "确认终端申请", `
+    <p class="lead">${queryOnly ? "允许 AI 查询机器和已有权限，方便之后预填操作申请。" : "AI 已预填目标机器、权限和用途，请确认本次申请。"}</p>
+    <div class="client-card"><div><span class="supporting">请求访问的应用</span><strong class="client-name">${escape(client.name)}</strong></div><span class="chip">${duration}</span></div>
+    <div class="request-purpose"><span class="supporting">申请用途</span><p>${escape(purpose)}</p></div>
+    <form method="post"><input type="hidden" name="nonce" value="${nonce}">
+      <fieldset><legend>${queryOnly ? "可查询的机器" : "本次操作的机器"}</legend>${hostFields}</fieldset>
+      <fieldset><legend>允许的操作</legend>${scopeFields}</fieldset>
+      <label class="field"><span>二次验证码</span><input type="text" name="code" placeholder="启用 2FA 后填写" autocomplete="one-time-code" inputmode="numeric"></label>
+      <p class="helper">未启用两步验证时可留空。</p>
+      <p class="notice">${queryOnly ? "此授权仅用于查询，不允许访问 PTY。实际终端操作仍需你单独确认短期授权。" : "终端继承主机 Agent 的系统权限。你可以随时撤销授权，同时关闭对应的终端会话。"}</p>
+      <details><summary>连接信息</summary><div class="connection-details">${connectionDetails}<p>权限：<code>${escape(scopes.join(" "))}</code></p><p>授权回调<br><code>${escape(q.redirect_uri)}</code></p></div></details>
+      <div class="actions"><button class="secondary" name="decision" value="deny">取消</button><button name="decision" value="approve">${queryOnly ? "允许查询" : "授权本次操作"} <span aria-hidden="true">→</span></button></div>
+    </form><div class="inline-link"><a class="text-link" href="${PREFIX}/oauth/grants">管理已有授权</a></div>`);
 });
 
 route("POST", "/oauth/authorize", async (req, res) => {
@@ -126,7 +164,7 @@ route("POST", "/oauth/authorize", async (req, res) => {
   pending.delete(nonce);
   await server.terminal("authorize", {user_uuid: user, code: f.get("code") || ""});
   const code = random();
-  codes.set(code, {client_id: request.client_id, redirect_uri: request.redirect_uri, challenge: request.challenge, user_uuid: user, remote_ip: req.context.remote_ip, hosts, scopes, expires_at: now() + CODE_TTL});
+  codes.set(code, {client_id: request.client_id, redirect_uri: request.redirect_uri, challenge: request.challenge, user_uuid: user, remote_ip: req.context.remote_ip, hosts, scopes, purpose: request.purpose, token_ttl_seconds: request.token_ttl_seconds, expires_at: now() + CODE_TTL});
   target.searchParams.set("code", code);
   redirect(res, target);
 });
@@ -142,10 +180,10 @@ route("POST", "/oauth/token", async (req, res) => {
   const challenge = digest(verifier, "base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
   if (challenge !== code.challenge) fail(400, "invalid_grant", "PKCE verification failed");
   const token = random();
-  const grant = {id: crypto.randomUUID(), token_hash: digest(token, "hex"), client_id: code.client_id, user_uuid: code.user_uuid, remote_ip: code.remote_ip, hosts: code.hosts, scopes: code.scopes, created_at: now(), expires_at: now() + config.access_token_ttl_seconds};
+  const grant = {id: crypto.randomUUID(), token_hash: digest(token, "hex"), client_id: code.client_id, user_uuid: code.user_uuid, remote_ip: code.remote_ip, hosts: code.hosts, scopes: code.scopes, purpose: code.purpose, created_at: now(), expires_at: now() + code.token_ttl_seconds};
   save(grants.concat([grant]));
   codes.delete(f.get("code"));
-  json(res, 200, {access_token: token, token_type: "Bearer", expires_in: config.access_token_ttl_seconds, expires_at: grant.expires_at, scope: grant.scopes.join(" "), allowed_hosts: grant.hosts, grant_id: grant.id});
+  json(res, 200, {access_token: token, token_type: "Bearer", expires_in: code.token_ttl_seconds, expires_at: grant.expires_at, scope: grant.scopes.join(" "), allowed_hosts: grant.hosts, grant_id: grant.id});
 });
 
 route("POST", "/oauth/revoke", async (req, res) => {
@@ -157,13 +195,36 @@ route("POST", "/oauth/revoke", async (req, res) => {
   json(res, 200, {});
 });
 
+route("GET", "/access", async (req, res) => {
+  const grant = await bearer(req, ACCESS_SCOPE);
+  const client = config.clients.find(c => c.id === grant.client_id);
+  if (!client) fail(403, "client_not_registered", "This OAuth client is no longer registered");
+  const hosts = await allowedHosts(grant.hosts.filter(h => client.hosts.includes(h)));
+  const visibleIds = hosts.map(h => h.uuid);
+  const activeGrants = grants.filter(g => g.user_uuid === grant.user_uuid && g.client_id === grant.client_id && g.expires_at > now() && g.hosts.every(h => visibleIds.includes(h)));
+  json(res, 200, {
+    client_id: client.id,
+    hosts,
+    requestable_scopes: client.scopes.filter(s => PTY_SCOPES.includes(s)),
+    pty_token_ttl_seconds: config.access_token_ttl_seconds,
+    query_expires_at: grant.expires_at,
+    grants: activeGrants.map(g => ({id: g.id, hosts: g.hosts, scopes: g.scopes, created_at: g.created_at, expires_at: g.expires_at, purpose: g.purpose})),
+  });
+});
+
 route("GET", "/oauth/grants", async (req, res) => {
   const user = administrator(req);
   collectExpired();
   const nonce = random();
   revokeForms.set(nonce, {user_uuid: user, expires_at: now() + CONSENT_TTL});
-  const rows = grants.filter(g => g.user_uuid === user && g.expires_at > now()).map(g => `<article class="grant-card"><div class="grant-heading"><h2>${escape(g.client_id)}</h2><span class="chip">${g.hosts.length} 台主机</span></div><p class="grant-meta">${g.scopes.map(s => s === "pty:write" ? "控制终端" : "查看终端").join(" · ")}<br>有效至 ${escape(new Date(g.expires_at * 1000).toISOString().slice(0, 16).replace("T", " "))} UTC</p><details><summary>查看授权详情</summary><div class="connection-details"><p>权限：<code>${escape(g.scopes.join(" "))}</code></p>${g.hosts.map(h => `<p><code>${escape(h)}</code></p>`).join("")}</div></details><form method="post" action="${PREFIX}/oauth/revoke-grant"><input type="hidden" name="nonce" value="${nonce}"><input type="hidden" name="grant_id" value="${escape(g.id)}"><div class="actions"><button class="tonal">撤销授权并关闭终端</button></div></form></article>`).join("");
-  page(res, "管理访问授权", `<p class="lead">查看仍然有效的授权，或结束应用对终端的访问。</p>${rows || `<div class="empty-state"><div class="brand-icon">${TERMINAL_ICON}</div><h2>还没有已授权的应用</h2><p>完成一次授权后，你可以在这里查看或撤销访问。</p></div>`}`);
+  const rows = grants.filter(g => g.user_uuid === user && g.expires_at > now()).map(g => `<article class="grant-card">
+    <div class="grant-heading"><h2>${escape(g.client_id)}</h2><span class="chip">${g.scopes.includes(ACCESS_SCOPE) ? "查询授权" : "终端授权"} · ${g.hosts.length} 台</span></div>
+    <p class="grant-purpose">${escape(g.purpose)}</p>
+    <p class="grant-meta">${g.scopes.map(s => SCOPE_INFO[s].title).join(" · ")}<br>有效至 ${escape(new Date(g.expires_at * 1000).toISOString().slice(0, 16).replace("T", " "))} UTC</p>
+    <details><summary>查看授权详情</summary><div class="connection-details"><p>权限：<code>${escape(g.scopes.join(" "))}</code></p>${g.hosts.map(h => `<p><code>${escape(h)}</code></p>`).join("")}</div></details>
+    <form method="post" action="${PREFIX}/oauth/revoke-grant"><input type="hidden" name="nonce" value="${nonce}"><input type="hidden" name="grant_id" value="${escape(g.id)}"><div class="actions"><button class="tonal">${g.scopes.includes(ACCESS_SCOPE) ? "撤销查询授权" : "撤销授权并关闭终端"}</button></div></form>
+  </article>`).join("");
+  page(res, "管理访问授权", `<p class="lead">分别管理长期查询授权与短期终端授权。</p>${rows || `<div class="empty-state"><div class="brand-icon">${TERMINAL_ICON}</div><h2>还没有已授权的应用</h2><p>完成一次授权后，你可以在这里查看或撤销访问。</p></div>`}`);
 });
 
 route("POST", "/oauth/revoke-grant", async (req, res) => {

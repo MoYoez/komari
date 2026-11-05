@@ -1,12 +1,13 @@
 {
   "admin_origin": "https://komari.example.com",
   "access_token_ttl_seconds": 3600,
+  "query_token_ttl_seconds": 2592000,
   "hosts": [{"uuid": "YOUR-KOMARI-CLIENT-UUID", "name": "Your server"}],
   "clients": [{
     "id": "komari-local-skill",
     "name": "Local Komari Skill",
     "redirect_uris": ["http://127.0.0.1:8765/callback"],
     "hosts": ["YOUR-KOMARI-CLIENT-UUID"],
-    "scopes": ["pty:read", "pty:write"]
+    "scopes": ["access:read", "pty:read", "pty:write"]
   }]
 }
