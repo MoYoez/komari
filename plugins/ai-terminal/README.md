@@ -2,7 +2,9 @@
 
 This plugin requires this fork's native `server.terminal` bridge. It does not run on an unmodified Komari server. Existing Komari agents and browser terminals use their original protocol.
 
-Copy `config.example.json` to `config.json` in the plugin root. Register each client's exact callback URI, host UUIDs and allowed scopes. Configure the administrator origin and `query_token_ttl_seconds` (query access, example: 30 days) there. PTY duration is selected for each request from three fixed choices: `60m` (60 minutes), `12h` (12 hours), or `24h` (24 hours). Package `komari-plugin.json`, `script.js`, `styles.css` and `config.json` at the ZIP root, install the plugin and approve its HTTP-route and system-RPC permissions. No shell-exec, arbitrary filesystem or listener permission is needed.
+Copy `config.example.json` to `config.json` in the plugin root. Register each client's exact callback URI, host UUIDs and allowed scopes. Configure the administrator origin and `query_token_ttl_seconds` (query access, example: 30 days) there. PTY duration is selected for each request from three fixed choices: `60m` (60 minutes), `12h` (12 hours), or `24h` (24 hours). In this directory, run `npm ci` and `npm run build` to build the MDUI components. Package `komari-plugin.json`, `script.js`, `config.json`, `assets/ui.js` and `assets/ui.css` with those paths preserved, install the plugin and approve its HTTP-route and system-RPC permissions. No shell-exec, arbitrary filesystem or listener permission is needed.
+
+The consent and grant pages use locally served MDUI 2.1.5 components; no CDN or remote font is required. The content region scrolls within the viewport while the consent action bar stays visible. UI dependencies and esbuild are build-time tools on the workstation; the Komari host only serves the generated static assets. The build inputs are `ui.ts`, `styles.css`, `package.json` and `package-lock.json`. After changing UI files, rebuild and deploy both assets with the plugin script.
 
 ## Query first, then request terminal access
 

@@ -1,0 +1,13 @@
+{
+  "name": "komari-ai-terminal-ui",
+  "private": true,
+  "scripts": {
+    "build": "esbuild ui.ts --bundle --minify --format=esm --target=es2022 --outdir=assets"
+  },
+  "dependencies": {
+    "mdui": "2.1.5"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

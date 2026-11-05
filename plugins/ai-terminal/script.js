@@ -24,7 +24,8 @@ const SCOPE_INFO = {
 };
 const SCOPES = Object.keys(SCOPE_INFO);
 const config = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
-const pageStyles = fs.readFileSync(path.join(__dirname, "styles.css"), "utf8");
+const uiScript = fs.readFileSync(path.join(__dirname, "assets/ui.js"), "utf8");
+const uiStyles = fs.readFileSync(path.join(__dirname, "assets/ui.css"), "utf8");
 const TERMINAL_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 8 4 4-4 4m6 0h4"/></svg>';
 const grantsPath = path.join(__storageDir__, "grants.json");
 const pending = new Map();
@@ -61,7 +62,7 @@ function json(res, status, value) { res.statusCode = status; res.setHeader("Cont
 function redirect(res, url) { res.statusCode = 303; res.setHeader("Location", url.toString()); res.end(); }
 function page(res, title, body) {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.end(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Komari</title><style>${pageStyles}</style></head><body><div class="shell"><header class="masthead"><a class="brand" href="/admin"><span class="brand-icon">${TERMINAL_ICON}</span>Komari</a><span class="product-name">AI Terminal</span></header><main><h1>${escape(title)}</h1>${body}</main><footer class="page-footer"><a class="text-link" href="/admin">返回 Komari</a><span>你的主机，由你掌控</span></footer></div></body></html>`);
+  res.end(`<!doctype html><html lang="zh-CN" class="mdui-theme-light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Komari</title><link rel="stylesheet" href="${PREFIX}/assets/ui.css"><script type="module" src="${PREFIX}/assets/ui.js"></script></head><body><div class="shell"><header class="masthead"><a class="brand" href="/admin"><span class="brand-icon">${TERMINAL_ICON}</span>Komari</a><span class="product-name">AI TERMINAL</span></header><main class="panel"><header class="panel-heading"><span class="eyebrow">应用访问管理</span><h1>${escape(title)}</h1></header>${body}</main><footer class="page-footer"><a class="text-link" href="/admin">返回 Komari</a><span>你的主机，由你掌控</span></footer></div></body></html>`);
 }
 function route(method, suffix, handler) {
   server.route(method, PREFIX + suffix, async (req, res) => {
@@ -116,6 +117,15 @@ async function revokeGrant(id) {
   await server.terminal("closeOwner", {owner: id});
 }
 
+route("GET", "/assets/ui.js", async (_req, res) => {
+  res.setHeader("Content-Type", "text/javascript; charset=utf-8");
+  res.end(uiScript);
+});
+route("GET", "/assets/ui.css", async (_req, res) => {
+  res.setHeader("Content-Type", "text/css; charset=utf-8");
+  res.end(uiStyles);
+});
+
 route("GET", "/oauth/authorize", async (req, res) => {
   const user = administrator(req);
   collectExpired();
@@ -138,24 +148,27 @@ route("GET", "/oauth/authorize", async (req, res) => {
   const hosts = await allowedHosts(requestedHosts);
   const nonce = random();
   pending.set(nonce, {client_id: client.id, redirect_uri: q.redirect_uri, challenge: q.code_challenge, state: q.state, scopes, hosts: requestedHosts, purpose, token_ttl_seconds: tokenTtl, user_uuid: user, expires_at: now() + CONSENT_TTL});
-  const hostFields = hosts.map(h => `<label class="selection"><input type="checkbox" name="host" value="${escape(h.uuid)}" checked><span><strong>${escape(h.name)}</strong><small>${queryOnly ? "允许查询此机器的名称与授权信息" : "通过 Komari Agent 连接"}</small></span></label>`).join("");
-  const scopeFields = scopes.map(s => `<label class="selection"><input type="checkbox" name="scope" value="${escape(s)}" checked><span><strong>${SCOPE_INFO[s].title}</strong><small>${SCOPE_INFO[s].description}</small></span></label>`).join("");
+  const hostFields = hosts.map(h => `<mdui-checkbox class="selection" name="host" value="${escape(h.uuid)}" checked><span class="selection-copy"><strong>${escape(h.name)}</strong><small>${queryOnly ? "查询此机器的名称与授权信息" : "通过 Komari Agent 连接"}</small></span></mdui-checkbox>`).join("");
+  const scopeFields = scopes.map(s => `<mdui-checkbox class="selection" name="scope" value="${escape(s)}" checked><span class="selection-copy"><strong>${SCOPE_INFO[s].title}</strong><small>${SCOPE_INFO[s].description}</small></span></mdui-checkbox>`).join("");
   const connectionDetails = hosts.map(h => `<p>${escape(h.name)}<br><code>${escape(h.uuid)}</code></p>`).join("");
-  const durationFields = queryOnly ? "" : `<fieldset><legend>授权时长</legend><div class="duration-options">${PTY_DURATIONS.map(d => `<label class="duration-option"><input type="radio" name="duration" value="${d.value}"${d.value === requestedDuration.value ? " checked" : ""} required><span>${d.label}</span></label>`).join("")}</div></fieldset>`;
+  const durationFields = queryOnly ? "" : `<fieldset><legend>授权时长</legend><mdui-segmented-button-group selects="single" name="duration" value="${requestedDuration.value}" full-width required aria-label="授权时长">${PTY_DURATIONS.map(d => `<mdui-segmented-button value="${d.value}">${d.label}</mdui-segmented-button>`).join("")}</mdui-segmented-button-group></fieldset>`;
   page(res, queryOnly ? "授权查询访问" : "确认终端申请", `
-    <p class="lead">${queryOnly ? "允许 AI 查询机器和已有权限，方便之后预填操作申请。" : "AI 已预填目标机器、权限、时长和用途，请确认本次申请。"}</p>
-    <div class="client-card"><div><span class="supporting">请求访问的应用</span><strong class="client-name">${escape(client.name)}</strong></div><span class="chip">${queryOnly ? `${tokenTtl / SECONDS_PER_DAY} 天` : "终端授权"}</span></div>
-    <div class="request-purpose"><span class="supporting">申请用途</span><p>${escape(purpose)}</p></div>
-    <form method="post"><input type="hidden" name="nonce" value="${nonce}">
+    <form method="post" class="consent-form"><input type="hidden" name="nonce" value="${nonce}">
+    <div class="consent-scroll" tabindex="0" role="region" aria-label="授权申请内容"><div class="consent-grid">
+      <aside class="request-summary">
+        <div class="client-card"><span class="application-mark">${TERMINAL_ICON}</span><div><span class="supporting">请求访问的应用</span><strong class="client-name">${escape(client.name)}</strong></div><span class="chip">${queryOnly ? `${tokenTtl / SECONDS_PER_DAY} 天 · 仅查询` : "终端授权"}</span></div>
+        <div class="request-purpose"><span class="supporting">申请用途</span><p>${escape(purpose)}</p></div>
+        <p class="notice">${queryOnly ? "只查询机器和已有权限。终端操作需要另行授权。" : "终端继承主机 Agent 的系统权限。撤销授权会同时关闭对应会话。"}</p>
+      </aside>
+      <div class="permission-fields"><p class="lead">${queryOnly ? "选择允许此应用查询的机器与信息。" : "确认 AI 申请的机器、权限与使用时长。"}</p>
       <fieldset><legend>${queryOnly ? "可查询的机器" : "本次操作的机器"}</legend>${hostFields}</fieldset>
       <fieldset><legend>允许的操作</legend>${scopeFields}</fieldset>
       ${durationFields}
-      <label class="field"><span>二次验证码</span><input type="text" name="code" placeholder="启用 2FA 后填写" autocomplete="one-time-code" inputmode="numeric"></label>
-      <p class="helper">未启用两步验证时可留空。</p>
-      <p class="notice">${queryOnly ? "此授权仅用于查询，不允许访问 PTY。实际终端操作仍需你单独确认短期授权。" : "终端继承主机 Agent 的系统权限。你可以随时撤销授权，同时关闭对应的终端会话。"}</p>
-      <details><summary>连接信息</summary><div class="connection-details">${connectionDetails}<p>权限：<code>${escape(scopes.join(" "))}</code></p><p>授权回调<br><code>${escape(q.redirect_uri)}</code></p></div></details>
-      <div class="actions"><button class="secondary" name="decision" value="deny">取消</button><button name="decision" value="approve">${queryOnly ? "允许查询" : "授权本次操作"} <span aria-hidden="true">→</span></button></div>
-    </form><div class="inline-link"><a class="text-link" href="${PREFIX}/oauth/grants">管理已有授权</a></div>`);
+      <mdui-text-field variant="outlined" name="code" label="二次验证码" placeholder="启用 2FA 后填写" helper="未启用两步验证时可留空" autocomplete="one-time-code" inputmode="numeric"></mdui-text-field>
+      <mdui-collapse><mdui-collapse-item header="连接信息"><div class="connection-details">${connectionDetails}<p>权限：<code>${escape(scopes.join(" "))}</code></p><p>授权回调<br><code>${escape(q.redirect_uri)}</code></p></div></mdui-collapse-item></mdui-collapse>
+      </div></div></div>
+      <footer class="action-bar"><mdui-button class="manage-link" variant="text" href="${PREFIX}/oauth/grants">管理已有授权</mdui-button><div class="action-buttons"><mdui-button variant="outlined" type="submit" name="decision" value="deny" formnovalidate>取消</mdui-button><mdui-button variant="filled" type="submit" name="decision" value="approve">${queryOnly ? "允许查询" : "授权本次操作"}<svg slot="end-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 12h15m-6-6 6 6-6 6"/></svg></mdui-button></div></footer>
+    </form>`);
 });
 
 route("POST", "/oauth/authorize", async (req, res) => {
@@ -233,10 +246,10 @@ route("GET", "/oauth/grants", async (req, res) => {
     <div class="grant-heading"><h2>${escape(g.client_id)}</h2><span class="chip">${g.scopes.includes(ACCESS_SCOPE) ? "查询授权" : "终端授权"} · ${g.hosts.length} 台</span></div>
     <p class="grant-purpose">${escape(g.purpose)}</p>
     <p class="grant-meta">${g.scopes.map(s => SCOPE_INFO[s].title).join(" · ")}<br>有效至 ${escape(new Date(g.expires_at * 1000).toISOString().slice(0, 16).replace("T", " "))} UTC</p>
-    <details><summary>查看授权详情</summary><div class="connection-details"><p>权限：<code>${escape(g.scopes.join(" "))}</code></p>${g.hosts.map(h => `<p><code>${escape(h)}</code></p>`).join("")}</div></details>
-    <form method="post" action="${PREFIX}/oauth/revoke-grant"><input type="hidden" name="nonce" value="${nonce}"><input type="hidden" name="grant_id" value="${escape(g.id)}"><div class="actions"><button class="tonal">${g.scopes.includes(ACCESS_SCOPE) ? "撤销查询授权" : "撤销授权并关闭终端"}</button></div></form>
+    <mdui-collapse><mdui-collapse-item header="查看授权详情"><div class="connection-details"><p>权限：<code>${escape(g.scopes.join(" "))}</code></p>${g.hosts.map(h => `<p><code>${escape(h)}</code></p>`).join("")}</div></mdui-collapse-item></mdui-collapse>
+    <form method="post" action="${PREFIX}/oauth/revoke-grant"><input type="hidden" name="nonce" value="${nonce}"><input type="hidden" name="grant_id" value="${escape(g.id)}"><div class="grant-actions"><mdui-button variant="tonal" type="submit">${g.scopes.includes(ACCESS_SCOPE) ? "撤销查询授权" : "撤销授权并关闭终端"}</mdui-button></div></form>
   </article>`).join("");
-  page(res, "管理访问授权", `<p class="lead">分别管理长期查询授权与短期终端授权。</p>${rows || `<div class="empty-state"><div class="brand-icon">${TERMINAL_ICON}</div><h2>还没有已授权的应用</h2><p>完成一次授权后，你可以在这里查看或撤销访问。</p></div>`}`);
+  page(res, "管理访问授权", `<div class="grant-scroll" tabindex="0" role="region" aria-label="已有授权"><p class="lead">分别管理长期查询授权与短期终端授权。</p>${rows || `<div class="empty-state"><div class="application-mark">${TERMINAL_ICON}</div><h2>还没有已授权的应用</h2><p>完成一次授权后，你可以在这里查看或撤销访问。</p></div>`}</div>`);
 });
 
 route("POST", "/oauth/revoke-grant", async (req, res) => {
