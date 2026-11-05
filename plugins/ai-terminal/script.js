@@ -10,6 +10,8 @@ const CONSENT_TTL = 300;
 const CODE_TTL = 60;
 const SCOPES = ["pty:read", "pty:write"];
 const config = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
+const pageStyles = fs.readFileSync(path.join(__dirname, "styles.css"), "utf8");
+const TERMINAL_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 8 4 4-4 4m6 0h4"/></svg>';
 const grantsPath = path.join(__storageDir__, "grants.json");
 const pending = new Map();
 const codes = new Map();
@@ -40,7 +42,7 @@ function json(res, status, value) { res.statusCode = status; res.setHeader("Cont
 function redirect(res, url) { res.statusCode = 303; res.setHeader("Location", url.toString()); res.end(); }
 function page(res, title, body) {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.end(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title><style>body{margin:0;background:#f6f5fa;color:#252336;font:16px/1.7 system-ui,sans-serif}main{max-width:640px;margin:6vh auto;padding:32px;background:white;border-radius:16px}h1{font-size:24px}label{display:block;margin:12px 0}input[type=text]{padding:8px;border:1px solid #ddd;border-radius:6px}button{padding:10px 18px;border:0;border-radius:8px;background:#7052b8;color:white;cursor:pointer;margin-right:8px}button[value=deny]{background:#ece9f4;color:#252336}code{overflow-wrap:anywhere}small{color:#666}article{border-top:1px solid #eee;padding:12px 0}@media(max-width:700px){main{margin:12px;padding:24px}}</style><main><h1>${escape(title)}</h1>${body}</main></html>`);
+  res.end(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Komari</title><style>${pageStyles}</style></head><body><div class="shell"><header class="masthead"><a class="brand" href="/admin"><span class="brand-icon">${TERMINAL_ICON}</span>Komari</a><span class="product-name">AI Terminal</span></header><main><h1>${escape(title)}</h1>${body}</main><footer class="page-footer"><a class="text-link" href="/admin">返回 Komari</a><span>你的主机，由你掌控</span></footer></div></body></html>`);
 }
 function route(method, suffix, handler) {
   server.route(method, PREFIX + suffix, async (req, res) => {
@@ -101,9 +103,10 @@ route("GET", "/oauth/authorize", async (req, res) => {
   const nonce = random();
   pending.set(nonce, {client_id: client.id, redirect_uri: q.redirect_uri, challenge: q.code_challenge, state: q.state, scopes, hosts: client.hosts, user_uuid: user, expires_at: now() + CONSENT_TTL});
   const hosts = config.hosts.filter(h => client.hosts.includes(h.uuid));
-  const hostFields = hosts.map(h => `<label><input type="checkbox" name="host" value="${escape(h.uuid)}" checked> ${escape(h.name)} <small>${escape(h.uuid)}</small></label>`).join("");
-  const scopeFields = scopes.map(s => `<label><input type="checkbox" name="scope" value="${escape(s)}" checked> ${s === "pty:write" ? "打开终端、输入命令、调整尺寸及关闭终端" : "查看本次授权的终端状态及输出"} <small>${escape(s)}</small></label>`).join("");
-  page(res, "授权 AI Terminal", `<p><strong>${escape(client.name)}</strong> 请求访问以下主机的终端。</p><p>有效期 ${config.access_token_ttl_seconds / 60} 分钟。终端继承各主机 Agent 的系统权限；授权可随时撤销。</p><form method="post"><input type="hidden" name="nonce" value="${nonce}"><h2>主机</h2>${hostFields}<h2>权限</h2>${scopeFields}<label>二次验证码（已开启 2FA 时填写）<br><input type="text" name="code" autocomplete="one-time-code" inputmode="numeric"></label><p><small>回调：<code>${escape(q.redirect_uri)}</code></small></p><button name="decision" value="approve">授权</button><button name="decision" value="deny">取消</button></form><p><a href="${PREFIX}/oauth/grants">管理已有授权</a></p>`);
+  const hostFields = hosts.map(h => `<label class="selection"><input type="checkbox" name="host" value="${escape(h.uuid)}" checked><span><strong>${escape(h.name)}</strong><small>通过 Komari Agent 连接</small></span></label>`).join("");
+  const scopeFields = scopes.map(s => `<label class="selection"><input type="checkbox" name="scope" value="${escape(s)}" checked><span><strong>${s === "pty:write" ? "控制终端" : "查看终端"}</strong><small>${s === "pty:write" ? "打开会话、输入命令、调整尺寸和关闭终端" : "读取本次授权的会话状态和终端输出"}</small></span></label>`).join("");
+  const connectionDetails = hosts.map(h => `<p>${escape(h.name)}<br><code>${escape(h.uuid)}</code></p>`).join("");
+  page(res, "授权终端访问", `<p class="lead">选择允许访问的主机和权限，连接你的本地 AI 工具。</p><div class="client-card"><div><span class="supporting">请求访问的应用</span><strong class="client-name">${escape(client.name)}</strong></div><span class="chip">${config.access_token_ttl_seconds / 60} 分钟</span></div><form method="post"><input type="hidden" name="nonce" value="${nonce}"><fieldset><legend>允许访问的主机</legend>${hostFields}</fieldset><fieldset><legend>允许的操作</legend>${scopeFields}</fieldset><label class="field"><span>二次验证码</span><input type="text" name="code" placeholder="启用 2FA 后填写" autocomplete="one-time-code" inputmode="numeric"></label><p class="helper">未启用两步验证时可留空。</p><p class="notice">终端继承主机 Agent 的系统权限。你可以随时撤销授权，同时关闭对应的终端会话。</p><details><summary>连接信息</summary><div class="connection-details">${connectionDetails}<p>权限：<code>${escape(scopes.join(" "))}</code></p><p>授权回调<br><code>${escape(q.redirect_uri)}</code></p></div></details><div class="actions"><button class="secondary" name="decision" value="deny">取消</button><button name="decision" value="approve">授权访问 <span aria-hidden="true">→</span></button></div></form><div class="inline-link"><a class="text-link" href="${PREFIX}/oauth/grants">管理已有授权</a></div>`);
 });
 
 route("POST", "/oauth/authorize", async (req, res) => {
@@ -159,8 +162,8 @@ route("GET", "/oauth/grants", async (req, res) => {
   collectExpired();
   const nonce = random();
   revokeForms.set(nonce, {user_uuid: user, expires_at: now() + CONSENT_TTL});
-  const rows = grants.filter(g => g.user_uuid === user && g.expires_at > now()).map(g => `<article><strong>${escape(g.client_id)}</strong><p>${escape(g.scopes.join(" "))}<br>主机：${g.hosts.map(escape).join(", ")}<br>过期：${escape(new Date(g.expires_at * 1000).toISOString())}</p><form method="post" action="${PREFIX}/oauth/revoke-grant"><input type="hidden" name="nonce" value="${nonce}"><input type="hidden" name="grant_id" value="${escape(g.id)}"><button>撤销授权并关闭终端</button></form></article>`).join("");
-  page(res, "AI Terminal 授权", `<p>撤销会立即关闭该授权创建的终端。</p>${rows || "<p>没有有效授权。</p>"}<p><a href="/admin">返回 Komari</a></p>`);
+  const rows = grants.filter(g => g.user_uuid === user && g.expires_at > now()).map(g => `<article class="grant-card"><div class="grant-heading"><h2>${escape(g.client_id)}</h2><span class="chip">${g.hosts.length} 台主机</span></div><p class="grant-meta">${g.scopes.map(s => s === "pty:write" ? "控制终端" : "查看终端").join(" · ")}<br>有效至 ${escape(new Date(g.expires_at * 1000).toISOString().slice(0, 16).replace("T", " "))} UTC</p><details><summary>查看授权详情</summary><div class="connection-details"><p>权限：<code>${escape(g.scopes.join(" "))}</code></p>${g.hosts.map(h => `<p><code>${escape(h)}</code></p>`).join("")}</div></details><form method="post" action="${PREFIX}/oauth/revoke-grant"><input type="hidden" name="nonce" value="${nonce}"><input type="hidden" name="grant_id" value="${escape(g.id)}"><div class="actions"><button class="tonal">撤销授权并关闭终端</button></div></form></article>`).join("");
+  page(res, "管理访问授权", `<p class="lead">查看仍然有效的授权，或结束应用对终端的访问。</p>${rows || `<div class="empty-state"><div class="brand-icon">${TERMINAL_ICON}</div><h2>还没有已授权的应用</h2><p>完成一次授权后，你可以在这里查看或撤销访问。</p></div>`}`);
 });
 
 route("POST", "/oauth/revoke-grant", async (req, res) => {
