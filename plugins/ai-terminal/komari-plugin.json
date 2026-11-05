@@ -3,7 +3,7 @@
   "short": "ai-terminal",
   "description": "OAuth-authorized PTY access for local Skills and AI programs",
   "author": "MoYoez",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "url": "https://github.com/MoYoez/komari",
   "komari": ">=1.6.1",
   "entry": "script.js",

@@ -1,6 +1,5 @@
 {
   "admin_origin": "https://komari.example.com",
-  "access_token_ttl_seconds": 3600,
   "query_token_ttl_seconds": 2592000,
   "hosts": [{"uuid": "YOUR-KOMARI-CLIENT-UUID", "name": "Your server"}],
   "clients": [{

@@ -47,6 +47,13 @@ legend { margin-bottom: 12px; padding: 0; color: var(--on-surface-variant); font
 .selection input { margin: 0; width: 20px; height: 20px; flex: 0 0 20px; accent-color: var(--primary); cursor: pointer; }
 .selection strong { display: block; font-size: 15px; font-weight: 500; }
 .selection small { display: block; color: var(--on-surface-variant); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+.duration-options { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--outline); border-radius: 24px; overflow: hidden; }
+.duration-option { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; font-size: 14px; white-space: nowrap; cursor: pointer; }
+.duration-option + .duration-option { border-left: 1px solid var(--outline); }
+.duration-option:has(input:checked) { background: var(--primary-container); color: var(--on-primary-container); }
+.duration-option:hover { background: #e8def4; }
+.duration-option:focus-within { outline: 2px solid var(--primary); outline-offset: -3px; }
+.duration-option input { width: 16px; height: 16px; margin: 0; accent-color: var(--primary); cursor: pointer; }
 .field { display: block; position: relative; border-radius: 4px 4px 0 0; background: var(--surface-container); padding: 8px 16px 6px; border-bottom: 1px solid var(--outline); }
 .field:focus-within { border-bottom: 2px solid var(--primary); padding-bottom: 5px; }
 .field span { display: block; font-size: 12px; color: var(--on-surface-variant); }

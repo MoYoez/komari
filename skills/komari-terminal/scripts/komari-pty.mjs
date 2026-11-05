@@ -8,7 +8,7 @@ const MILLISECONDS_PER_SECOND = 1000;
 const ACCESS_SCOPE = 'access:read';
 const PTY_SCOPES = ['pty:read', 'pty:write'];
 const LOGIN_COMMAND = 'login';
-const AUTHORIZE_COMMAND = 'authorize HOSTS_CSV SCOPES_CSV PURPOSE';
+const AUTHORIZE_COMMAND = 'authorize HOSTS_CSV SCOPES_CSV DURATION PURPOSE';
 const ACCESS_CREDENTIALS_FILE = 'access-credentials.json';
 const PTY_CREDENTIALS_FILE = 'credentials.json';
 const LOOPBACK_HOST = '127.0.0.1';
@@ -23,7 +23,7 @@ const CONFIG_FIELDS = ['authorization_url', 'api_base', 'client_id', 'redirect_u
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const ARGUMENT_COUNTS = {
-  login: [0], access: [0], authorize: [3], 'logout-access': [0],
+  login: [0], access: [0], authorize: [4], 'logout-access': [0],
   list: [0], open: [1], read: [1, 2], write: [2],
   command: [2], interrupt: [1], resize: [3], close: [1], logout: [0],
 };
@@ -74,8 +74,8 @@ function parseArguments() {
       const hosts = csv(args[0], 'HOSTS_CSV');
       const scopes = csv(args[1], 'SCOPES_CSV');
       if (!hosts.every((host) => UUID.test(host))) throw new Error('HOSTS_CSV must contain UUIDs.');
-      if (!args[2].trim()) throw new Error('PURPOSE must not be empty.');
-      authorization = { hosts, scopes, purpose: args[2] };
+      if (!args[3].trim()) throw new Error('PURPOSE must not be empty.');
+      authorization = { hosts, scopes, duration: args[2], purpose: args[3] };
       break;
     }
     case 'list':
@@ -278,7 +278,7 @@ async function main() {
       print(access);
       return;
     }
-    const { hosts, scopes, purpose } = operation.authorization;
+    const { hosts, scopes, duration, purpose } = operation.authorization;
     for (const host of hosts) {
       if (!access.hosts.some((allowed) => allowed.uuid === host)) {
         throw new Error(`authorize: host ${host} is not allowed by /access.`);
@@ -289,8 +289,11 @@ async function main() {
         throw new Error(`authorize: scope ${scope} is not allowed by /access.`);
       }
     }
+    if (!access.pty_durations.some((allowed) => allowed.value === duration)) {
+      throw new Error('authorize: DURATION must be 60m, 12h or 24h as returned by /access.');
+    }
     const result = await authorizeOAuth(config, port, credentialsPath, {
-      scope: scopes.join(' '), hosts: hosts.join(','), purpose,
+      scope: scopes.join(' '), hosts: hosts.join(','), duration, purpose,
     }, AUTHORIZE_COMMAND);
     print({ authorized: true, ...result });
     return;

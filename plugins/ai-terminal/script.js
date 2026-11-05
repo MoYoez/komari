@@ -8,10 +8,14 @@ if (typeof server.terminal !== "function") throw new Error("AI Terminal requires
 const PREFIX = "/api/ai-terminal";
 const CONSENT_TTL = 300;
 const CODE_TTL = 60;
-const SECONDS_PER_MINUTE = 60;
 const SECONDS_PER_DAY = 86400;
 const ACCESS_SCOPE = "access:read";
 const PTY_SCOPES = ["pty:read", "pty:write"];
+const PTY_DURATIONS = [
+  {value: "60m", label: "60 分钟", seconds: 3600},
+  {value: "12h", label: "12 小时", seconds: 43200},
+  {value: "24h", label: "24 小时", seconds: 86400},
+];
 const QUERY_PURPOSE = "查询可用机器和已有授权";
 const SCOPE_INFO = {
   "access:read": {title: "查询机器与授权", description: "查看允许访问的机器及本应用已有的授权，不读取终端输出或执行命令"},
@@ -29,8 +33,8 @@ const revokeForms = new Map();
 if (!fs.existsSync(grantsPath)) fs.writeFileSync(grantsPath, "[]");
 let grants = JSON.parse(fs.readFileSync(grantsPath, "utf8"));
 
-if (new URL(config.admin_origin).origin !== config.admin_origin || ![config.access_token_ttl_seconds, config.query_token_ttl_seconds].every(v => Number.isInteger(v) && v > 0)) {
-  throw new Error("Set admin_origin and positive access_token_ttl_seconds/query_token_ttl_seconds in config.json");
+if (new URL(config.admin_origin).origin !== config.admin_origin || !Number.isInteger(config.query_token_ttl_seconds) || config.query_token_ttl_seconds <= 0) {
+  throw new Error("Set admin_origin and positive query_token_ttl_seconds in config.json");
 }
 for (const client of config.clients) {
   if (!client.id || !client.name || client.redirect_uris.length === 0 || client.hosts.length === 0 || client.scopes.length === 0) throw new Error("Incomplete OAuth client configuration");
@@ -47,6 +51,11 @@ function random() { return crypto.randomBytes(32).toString("hex"); }
 function digest(value, encoding) { return crypto.createHash("sha256").update(value).digest(encoding); }
 function save(next) { fs.writeFileSync(grantsPath, JSON.stringify(next, null, 2)); grants = next; }
 function fail(status, code, message) { const error = new Error(message); error.status = status; error.code = code; throw error; }
+function ptyDuration(value) {
+  const duration = PTY_DURATIONS.find(d => d.value === value);
+  if (!duration) fail(400, "invalid_request", "PTY duration must be 60m, 12h or 24h");
+  return duration;
+}
 function escape(value) { return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
 function json(res, status, value) { res.statusCode = status; res.setHeader("Content-Type", "application/json; charset=utf-8"); res.end(JSON.stringify(value)); }
 function redirect(res, url) { res.statusCode = 303; res.setHeader("Location", url.toString()); res.end(); }
@@ -124,21 +133,23 @@ route("GET", "/oauth/authorize", async (req, res) => {
   const requestedHosts = queryOnly ? client.hosts : q.hosts.split(",");
   if (!requestedHosts.length || !requestedHosts.every(h => client.hosts.includes(h))) fail(400, "invalid_request", "Requested hosts are outside this client's allowlist");
   const purpose = queryOnly ? QUERY_PURPOSE : q.purpose.trim();
-  const tokenTtl = queryOnly ? config.query_token_ttl_seconds : config.access_token_ttl_seconds;
+  const requestedDuration = queryOnly ? null : ptyDuration(q.duration);
+  const tokenTtl = queryOnly ? config.query_token_ttl_seconds : requestedDuration.seconds;
   const hosts = await allowedHosts(requestedHosts);
   const nonce = random();
   pending.set(nonce, {client_id: client.id, redirect_uri: q.redirect_uri, challenge: q.code_challenge, state: q.state, scopes, hosts: requestedHosts, purpose, token_ttl_seconds: tokenTtl, user_uuid: user, expires_at: now() + CONSENT_TTL});
   const hostFields = hosts.map(h => `<label class="selection"><input type="checkbox" name="host" value="${escape(h.uuid)}" checked><span><strong>${escape(h.name)}</strong><small>${queryOnly ? "允许查询此机器的名称与授权信息" : "通过 Komari Agent 连接"}</small></span></label>`).join("");
   const scopeFields = scopes.map(s => `<label class="selection"><input type="checkbox" name="scope" value="${escape(s)}" checked><span><strong>${SCOPE_INFO[s].title}</strong><small>${SCOPE_INFO[s].description}</small></span></label>`).join("");
   const connectionDetails = hosts.map(h => `<p>${escape(h.name)}<br><code>${escape(h.uuid)}</code></p>`).join("");
-  const duration = queryOnly ? `${tokenTtl / SECONDS_PER_DAY} 天` : `${tokenTtl / SECONDS_PER_MINUTE} 分钟`;
+  const durationFields = queryOnly ? "" : `<fieldset><legend>授权时长</legend><div class="duration-options">${PTY_DURATIONS.map(d => `<label class="duration-option"><input type="radio" name="duration" value="${d.value}"${d.value === requestedDuration.value ? " checked" : ""} required><span>${d.label}</span></label>`).join("")}</div></fieldset>`;
   page(res, queryOnly ? "授权查询访问" : "确认终端申请", `
-    <p class="lead">${queryOnly ? "允许 AI 查询机器和已有权限，方便之后预填操作申请。" : "AI 已预填目标机器、权限和用途，请确认本次申请。"}</p>
-    <div class="client-card"><div><span class="supporting">请求访问的应用</span><strong class="client-name">${escape(client.name)}</strong></div><span class="chip">${duration}</span></div>
+    <p class="lead">${queryOnly ? "允许 AI 查询机器和已有权限，方便之后预填操作申请。" : "AI 已预填目标机器、权限、时长和用途，请确认本次申请。"}</p>
+    <div class="client-card"><div><span class="supporting">请求访问的应用</span><strong class="client-name">${escape(client.name)}</strong></div><span class="chip">${queryOnly ? `${tokenTtl / SECONDS_PER_DAY} 天` : "终端授权"}</span></div>
     <div class="request-purpose"><span class="supporting">申请用途</span><p>${escape(purpose)}</p></div>
     <form method="post"><input type="hidden" name="nonce" value="${nonce}">
       <fieldset><legend>${queryOnly ? "可查询的机器" : "本次操作的机器"}</legend>${hostFields}</fieldset>
       <fieldset><legend>允许的操作</legend>${scopeFields}</fieldset>
+      ${durationFields}
       <label class="field"><span>二次验证码</span><input type="text" name="code" placeholder="启用 2FA 后填写" autocomplete="one-time-code" inputmode="numeric"></label>
       <p class="helper">未启用两步验证时可留空。</p>
       <p class="notice">${queryOnly ? "此授权仅用于查询，不允许访问 PTY。实际终端操作仍需你单独确认短期授权。" : "终端继承主机 Agent 的系统权限。你可以随时撤销授权，同时关闭对应的终端会话。"}</p>
@@ -161,10 +172,11 @@ route("POST", "/oauth/authorize", async (req, res) => {
   const scopes = f.getAll("scope");
   if (!hosts.length || !hosts.every(h => request.hosts.includes(h))) fail(400, "invalid_request", "Select allowed hosts");
   if (!scopes.length || !scopes.every(s => request.scopes.includes(s))) fail(400, "invalid_scope", "Select requested scopes");
+  const tokenTtl = request.scopes.includes(ACCESS_SCOPE) ? request.token_ttl_seconds : ptyDuration(f.get("duration")).seconds;
   pending.delete(nonce);
   await server.terminal("authorize", {user_uuid: user, code: f.get("code") || ""});
   const code = random();
-  codes.set(code, {client_id: request.client_id, redirect_uri: request.redirect_uri, challenge: request.challenge, user_uuid: user, remote_ip: req.context.remote_ip, hosts, scopes, purpose: request.purpose, token_ttl_seconds: request.token_ttl_seconds, expires_at: now() + CODE_TTL});
+  codes.set(code, {client_id: request.client_id, redirect_uri: request.redirect_uri, challenge: request.challenge, user_uuid: user, remote_ip: req.context.remote_ip, hosts, scopes, purpose: request.purpose, token_ttl_seconds: tokenTtl, expires_at: now() + CODE_TTL});
   target.searchParams.set("code", code);
   redirect(res, target);
 });
@@ -206,7 +218,7 @@ route("GET", "/access", async (req, res) => {
     client_id: client.id,
     hosts,
     requestable_scopes: client.scopes.filter(s => PTY_SCOPES.includes(s)),
-    pty_token_ttl_seconds: config.access_token_ttl_seconds,
+    pty_durations: PTY_DURATIONS,
     query_expires_at: grant.expires_at,
     grants: activeGrants.map(g => ({id: g.id, hosts: g.hosts, scopes: g.scopes, created_at: g.created_at, expires_at: g.expires_at, purpose: g.purpose})),
   });
